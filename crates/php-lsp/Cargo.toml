@@ -1,0 +1,32 @@
+[package]
+name = "php-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "php-lsp"
+path = "src/main.rs"
+
+[dependencies]
+php-syntax.workspace = true
+php-format.workspace = true
+php-index.workspace = true
+php-composer.workspace = true
+php-stubs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+ignore.workspace = true
+crossbeam-channel.workspace = true
+lsp-server.workspace = true
+lsp-types.workspace = true
+rustc-hash.workspace = true
+log.workspace = true
+env_logger.workspace = true
+percent-encoding.workspace = true
+mimalloc.workspace = true
+libmimalloc-sys.workspace = true

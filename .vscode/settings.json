@@ -1,0 +1,17 @@
+{
+  "editor.tabSize": 2,
+  "[rust]": {
+    "editor.tabSize": 4
+  },
+  "editor.formatOnSave": false,
+  "rust-analyzer.initializeStopped": true,
+  "rust-analyzer.cargo.autoreload": true,
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.extraEnv": {
+    "CARGO_TARGET_DIR": "./target/ra/"
+  },
+  "rust-analyzer.server.extraEnv": {
+    "RUSTUP_TOOLCHAIN": "stable",
+    "CARGO_TARGET_DIR": "./target/ra/"
+  }
+}
