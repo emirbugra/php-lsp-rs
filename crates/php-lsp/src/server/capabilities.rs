@@ -46,6 +46,7 @@ pub(super) fn initialize_result() -> Value {
                 CodeActionKind::REFACTOR_REWRITE,
                 CodeActionKind::REFACTOR_EXTRACT,
                 CodeActionKind::REFACTOR_INLINE,
+                CodeActionKind::new("refactor.move"),
             ]),
             work_done_progress_options: Default::default(),
             resolve_provider: Some(false),

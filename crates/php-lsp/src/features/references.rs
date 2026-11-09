@@ -156,7 +156,7 @@ impl Server {
     }
 
     /// Text to search for references: an open document's, or the file's (a Blade template's PHP code).
-    fn text_of_candidate(&self, uri: &str) -> Option<String> {
+    pub(crate) fn text_of_candidate(&self, uri: &str) -> Option<String> {
         if let Some(d) = self.docs.get(uri) {
             return Some(d.text.clone());
         }

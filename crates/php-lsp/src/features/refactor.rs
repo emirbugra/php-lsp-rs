@@ -44,6 +44,11 @@ impl Server {
                 found.push((CodeActionKind::REFACTOR_EXTRACT, a));
             }
         }
+        if allowed(&CodeActionKind::REFACTOR_EXTRACT) {
+            if let Some(a) = super::extract_method::extract_method(text, &doc.parse.stmts, sel) {
+                found.push((CodeActionKind::REFACTOR_EXTRACT, a));
+            }
+        }
         if allowed(&CodeActionKind::REFACTOR_INLINE) {
             if let Some(a) = inline_variable(text, &doc.parse.stmts, sel.start as usize) {
                 found.push((CodeActionKind::REFACTOR_INLINE, a));
@@ -95,13 +100,13 @@ impl<'a> Visitor<'a> for FindScope<'a> {
     }
 }
 
-fn scope_of(stmts: &[Stmt], at: Span) -> (Option<&FunctionDecl>, bool) {
+pub(super) fn scope_of(stmts: &[Stmt], at: Span) -> (Option<&FunctionDecl>, bool) {
     let mut f = FindScope { at, found: None, in_arrow: false };
     walk_stmts(&mut f, stmts);
     (f.found, f.in_arrow)
 }
 
-fn body_of<'a>(stmts: &'a [Stmt], f: Option<&'a FunctionDecl>) -> &'a [Stmt] {
+pub(super) fn body_of<'a>(stmts: &'a [Stmt], f: Option<&'a FunctionDecl>) -> &'a [Stmt] {
     match f {
         Some(f) => f.body.as_deref().unwrap_or(&[]),
         None => stmts,
@@ -110,7 +115,7 @@ fn body_of<'a>(stmts: &'a [Stmt], f: Option<&'a FunctionDecl>) -> &'a [Stmt] {
 
 /// Statement lists directly inside `s` (blocks of control statements, try / catch, `{ }`,
 /// namespace bodies). Nested functions and classes are their own scope.
-fn child_lists(s: &Stmt) -> Vec<&[Stmt]> {
+pub(super) fn child_lists(s: &Stmt) -> Vec<&[Stmt]> {
     match &s.kind {
         StmtKind::Namespace { body: Some(b), .. } => vec![b],
         StmtKind::Control { blocks, .. } => blocks.iter().map(|b| &b[..]).collect(),
@@ -173,7 +178,7 @@ fn starts_line(src: &str, s: &Stmt) -> Option<String> {
 
 /// Spans of expressions whose value is written or that must stay a variable.
 #[derive(Default)]
-struct Context {
+pub(super) struct Context {
     lvalues: Vec<Span>,
     in_string: Vec<Span>,
 }
@@ -221,7 +226,7 @@ impl Context {
         }
     }
 
-    fn is_lvalue(&self, s: Span) -> bool {
+    pub(super) fn is_lvalue(&self, s: Span) -> bool {
         self.lvalues.contains(&s)
     }
 
@@ -230,7 +235,7 @@ impl Context {
     }
 }
 
-fn context(stmts: &[Stmt]) -> Context {
+pub(super) fn context(stmts: &[Stmt]) -> Context {
     let mut c = Context::default();
     walk_stmts(&mut c, stmts);
     c

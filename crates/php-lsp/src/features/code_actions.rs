@@ -272,6 +272,9 @@ impl Server {
             self.type_actions(&uri, p.range, &mut actions);
         }
         self.refactor_actions(&uri, p.range, &only, &mut actions);
+        if kind_allowed(&only, &CodeActionKind::new("refactor.move")) {
+            self.move_class_action(&uri, p.range, &mut actions);
+        }
         serde_json::to_value(actions).ok()
     }
 

@@ -438,6 +438,9 @@ impl Server {
             "phpLsp/exportCodeStyle" => {
                 self.export_code_style(params(req.params)?).map(Some).map_err(|e| error(ErrorCode::InvalidParams, e))
             }
+            "phpLsp/moveClass" => {
+                self.move_class(params(req.params)?).map(Some).map_err(|e| error(ErrorCode::InvalidParams, e))
+            }
             "phpLsp/status" => Ok(Some(json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "indexing": self.indexing,
