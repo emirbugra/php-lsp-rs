@@ -123,6 +123,54 @@ pub fn parse_doc_type(ty: &str, resolve: &dyn Fn(&str) -> Option<String>) -> Typ
     out
 }
 
+/// A conditional return type `($param is [not] Test ? Then : Else)`, kept apart so a call can pick
+/// the branch its argument selects (`config()` -> `Repository`, `config('a.b')` -> `mixed`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CondType {
+    /// Parameter name without `$`.
+    pub param: String,
+    pub negated: bool,
+    /// The test type as written, lowercased: `null`, `string`, `class-string<tclass>`, `user` …
+    pub test: String,
+    /// Resolved atoms of the test (class tests: the class FQN, `class-string<@T>` …).
+    pub test_atoms: Types,
+    pub then: CondArm,
+    pub els: CondArm,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CondArm {
+    Types(Types),
+    Cond(Box<CondType>),
+}
+
+impl CondArm {
+    /// Every atom of the arm (both sides of a nested condition).
+    pub fn all_atoms(&self) -> Types {
+        match self {
+            CondArm::Types(t) => t.clone(),
+            CondArm::Cond(c) => {
+                let mut out = c.then.all_atoms();
+                for a in c.els.all_atoms() {
+                    if !out.contains(&a) {
+                        out.push(a);
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+/// Parse a doc type that is one conditional type (nothing else around it); `None` otherwise.
+pub fn parse_conditional(ty: &str, resolve: &dyn Fn(&str) -> Option<String>) -> Option<CondType> {
+    let mut p = Parser { c: ty.chars().collect(), i: 0, resolve };
+    p.skip_spaces();
+    let c = p.conditional()?;
+    p.skip_spaces();
+    (p.i >= p.c.len()).then_some(c)
+}
+
 impl<'a> Parser<'a> {
     fn peek(&self) -> Option<char> {
         self.c.get(self.i).copied()
@@ -231,6 +279,74 @@ impl<'a> Parser<'a> {
         atoms.extend(self.union());
         self.eat(')');
         atoms
+    }
+
+    /// `($param is [not] Test ? Then : Else)` at the current `(`; restores the position on failure.
+    fn conditional(&mut self) -> Option<CondType> {
+        let save = self.i;
+        if self.peek() != Some('(') {
+            return None;
+        }
+        self.i += 1;
+        self.skip_spaces();
+        if self.peek() != Some('$') {
+            self.i = save;
+            return None;
+        }
+        self.i += 1;
+        let start = self.i;
+        while self.peek().map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false) {
+            self.i += 1;
+        }
+        let param: String = self.c[start..self.i].iter().collect();
+        if !self.keyword("is") || param.is_empty() {
+            self.i = save;
+            return None;
+        }
+        let negated = self.keyword("not");
+        self.skip_spaces();
+        let ts = self.i;
+        let test_atoms = self.atom();
+        let test: String = self.c[ts..self.i].iter().collect::<String>().trim().to_ascii_lowercase();
+        if !self.eat('?') {
+            self.i = save;
+            return None;
+        }
+        let then = self.cond_arm();
+        if !self.eat(':') {
+            self.i = save;
+            return None;
+        }
+        let els = self.cond_arm();
+        self.eat(')');
+        Some(CondType { param, negated, test, test_atoms, then, els })
+    }
+
+    /// Consume `w` followed by whitespace.
+    fn keyword(&mut self, w: &str) -> bool {
+        self.skip_spaces();
+        let end = self.i + w.len();
+        if end < self.c.len() && self.c[self.i..end].iter().collect::<String>() == w && self.c[end].is_whitespace() {
+            self.i = end;
+            return true;
+        }
+        false
+    }
+
+    /// One side of a conditional: a nested conditional, or a union.
+    fn cond_arm(&mut self) -> CondArm {
+        self.skip_spaces();
+        let save = self.i;
+        if let Some(c) = self.conditional() {
+            self.skip_spaces();
+            if !matches!(self.peek(), Some('|' | '&')) {
+                return CondArm::Cond(Box::new(c));
+            }
+            self.i = save;
+        }
+        let mut t = self.union();
+        t.dedup();
+        CondArm::Types(t)
     }
 
     /// `Foo`, `Foo<A, B>`, `array{...}`, `callable(...): R`, `Foo::BAR`, each with `[]` suffixes.

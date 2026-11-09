@@ -271,6 +271,7 @@ impl Server {
         if kind_allowed(&only, &CodeActionKind::REFACTOR_REWRITE) {
             self.type_actions(&uri, p.range, &mut actions);
         }
+        self.refactor_actions(&uri, p.range, &only, &mut actions);
         serde_json::to_value(actions).ok()
     }
 

@@ -1,6 +1,7 @@
 //! Inlay hints:
 //! - parameter names before call arguments (`setName(name: $x)`), unless the argument already says it;
 //! - the inferred type after a variable where it gets its value (`$user: User = User::find(1)`,
+//!   `$data: array = [...]`, `$email: string = $user->email`,
 //!   `foreach ($users as $user: User)`, untyped closure parameters), unless the type is already
 //!   written there (`new User`, a typed parameter, `catch (E $e)`, a `@var` tag).
 
@@ -135,7 +136,8 @@ impl Server {
             self.parameter_hints(&analysis, &sites, doc, from, to, &mut hints);
         }
         if self.config.inlay_variable_types {
-            variable_type_hints(&analysis, &sites, doc, from, to, &mut hints);
+            let scalars = super::scalar::scalar_types(&doc.text, &doc.parse.stmts, &analysis, &self.index);
+            variable_type_hints(&analysis, &sites, &scalars, doc, from, to, &mut hints);
         }
         hints.sort_by_key(|h| (h.position.line, h.position.character));
         serde_json::to_value(hints).ok()
@@ -199,6 +201,7 @@ impl Server {
 fn variable_type_hints(
     analysis: &Analysis,
     sites: &Sites,
+    scalars: &FxHashMap<u32, String>,
     doc: &crate::server::Doc,
     from: usize,
     to: usize,
@@ -213,7 +216,7 @@ fn variable_type_hints(
         if sites.obvious.contains(&r.span.start) || has_var_tag(&doc.text, r.span.start as usize) {
             continue;
         }
-        let Some(shown) = short_display(classes) else { continue };
+        let Some(shown) = short_display(classes).or_else(|| scalars.get(&r.span.start).cloned()) else { continue };
         let (line, character) = doc.lines.position(&doc.text, r.span.end as usize);
         hints.push(hint(Position { line, character }, format!(": {shown}"), InlayHintKind::TYPE, false, false));
     }

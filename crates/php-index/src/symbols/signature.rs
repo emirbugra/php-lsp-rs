@@ -167,6 +167,41 @@ impl SymbolCollector<'_> {
             .join(", ")
     }
 
+    /// A conditional `@return ($param is X ? A : B)`, unless a native return type names a class.
+    pub(super) fn cond_return(
+        &self,
+        f: &FunctionDecl,
+        doc: &Option<DocBlock>,
+        self_fqn: Option<&str>,
+        parent: Option<&str>,
+    ) -> Option<Box<crate::types::CondType>> {
+        let t = doc.as_ref()?.tag_pref("return")?;
+        let ty = docblock::split_type(&t.body).0;
+        if !ty.trim_start().starts_with('(') {
+            return None;
+        }
+        if let Some(r) = &f.ret {
+            if !self.hint_classes(r, self_fqn, parent).is_empty() {
+                return None;
+            }
+        }
+        let resolve = |n: &str| {
+            if self.templates_in_scope.iter().any(|t| t == n) {
+                return Some(format!("@{n}"));
+            }
+            if is_builtin_type(n) {
+                return None;
+            }
+            match n.to_ascii_lowercase().as_str() {
+                "self" => self_fqn.map(|s| s.to_string()),
+                "parent" => parent.map(|p| p.to_string()),
+                "static" => Some("static".to_string()),
+                _ => Some(self.ctx.resolve_class(n)),
+            }
+        };
+        crate::types::parse_conditional(ty, &resolve).map(Box::new)
+    }
+
     /// (display text, resolved atoms) of the return type.
     pub(super) fn return_type(
         &self,

@@ -57,7 +57,7 @@ pub fn string_at(text: &str, offset: usize) -> Option<StrLit> {
 }
 
 /// The unmatched `(` before `pos` and the index of the argument `pos` is in.
-fn open_paren(text: &str, pos: usize) -> Option<(usize, usize)> {
+pub(crate) fn open_paren(text: &str, pos: usize) -> Option<(usize, usize)> {
     let b = text.as_bytes();
     let (mut depth, mut commas, mut i, mut steps) = (0i32, 0usize, pos, 0);
     while i > 0 && steps < 2000 {
@@ -75,7 +75,7 @@ fn open_paren(text: &str, pos: usize) -> Option<(usize, usize)> {
     None
 }
 
-fn word_before(text: &str, end: usize) -> (usize, &str) {
+pub(crate) fn word_before(text: &str, end: usize) -> (usize, &str) {
     let b = text.as_bytes();
     let mut e = end;
     while e > 0 && b[e - 1].is_ascii_whitespace() {

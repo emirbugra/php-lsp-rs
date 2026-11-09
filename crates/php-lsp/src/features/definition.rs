@@ -13,7 +13,7 @@ impl Server {
             let doc = self.docs.get(&uri)?;
             offset_of(&doc.text, &doc.lines, pos.position)
         };
-        if let Some(locs) = self.laravel_definition(&uri, offset) {
+        if let Some(locs) = self.laravel_definition(&uri, offset).or_else(|| self.hook_definition(&uri, offset)) {
             return serde_json::to_value(GotoDefinitionResponse::Array(locs)).ok();
         }
         let analysis = self.analyze_doc(&uri)?;

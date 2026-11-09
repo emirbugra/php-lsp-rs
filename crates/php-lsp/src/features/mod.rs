@@ -8,10 +8,13 @@ mod hierarchy;
 mod hover;
 mod inlay;
 mod laravel;
+mod refactor;
 mod references;
+mod scalar;
 mod signature;
 mod symbols;
 mod type_actions;
+mod wordpress;
 
 pub use format::FormatSettings;
 use lsp_types::{CompletionItemKind, SymbolKind as LspKind};

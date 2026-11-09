@@ -73,6 +73,8 @@ pub struct Symbol {
     pub ty_native: bool,
     /// Resolved class FQNs of `ty`. May contain `static`.
     pub type_classes: Vec<IStr>,
+    /// `@return ($param is X ? A : B)`: the branches apart, so a call picks one (functions, methods).
+    pub cond_ret: Option<Box<crate::types::CondType>>,
     pub params: Vec<ParamInfo>,
     /// One-line signature for hover / completion detail.
     pub detail: IStr,
@@ -132,6 +134,7 @@ impl Symbol {
             ty: None,
             ty_native: false,
             type_classes: Vec::new(),
+            cond_ret: None,
             params: Vec::new(),
             detail: IStr::from(String::new()),
             doc: None,

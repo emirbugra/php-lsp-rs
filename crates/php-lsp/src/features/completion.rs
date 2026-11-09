@@ -183,7 +183,7 @@ impl Server {
             let doc = self.docs.get(&uri)?;
             offset_of(&doc.text, &doc.lines, pos.position)
         };
-        if let Some(items) = self.laravel_completion(&uri, offset) {
+        if let Some(items) = self.laravel_completion(&uri, offset).or_else(|| self.hook_completion(&uri, offset)) {
             return serde_json::to_value(CompletionResponse::List(CompletionList { is_incomplete: false, items })).ok();
         }
         let doc = self.docs.get(&uri)?;

@@ -129,6 +129,8 @@ pub struct FileData {
     names: Box<[u32]>,
     /// (lowercase container FQN, indices into `symbols`); a file rarely declares more than a few classes.
     members: Box<[(IStr, Box<[u32]>)]>,
+    /// WordPress hooks fired or used in the file.
+    pub hooks: Box<[crate::hooks::Hook]>,
 }
 
 impl FileData {
@@ -148,7 +150,7 @@ impl FileData {
             }
         }
         let members = members.into_iter().map(|(k, v)| (k, v.into_boxed_slice())).collect();
-        FileData { uri: IStr::new(&uri), symbols, names: names.into_boxed_slice(), members }
+        FileData { uri: IStr::new(&uri), symbols, names: names.into_boxed_slice(), members, hooks: Box::default() }
     }
 
     /// Re-allocate all heap data contiguously. Data built on worker threads sits on pages shared
@@ -159,6 +161,7 @@ impl FileData {
             symbols: self.symbols.clone(),
             names: self.names.clone(),
             members: self.members.iter().map(|(k, v)| (*k, v.clone())).collect(),
+            hooks: self.hooks.clone(),
         }
     }
 
@@ -313,6 +316,11 @@ impl Index {
 
     pub fn file_id(&self, uri: &str) -> Option<u32> {
         self.by_uri.get(uri).copied()
+    }
+
+    /// Every WordPress hook site in the index, with the URI of its file.
+    pub fn hooks(&self) -> impl Iterator<Item = (&str, &crate::hooks::Hook)> {
+        self.files.iter().flatten().flat_map(|f| f.hooks.iter().map(move |h| (&*f.uri, h)))
     }
 
     /// Ids of all files that declare or mention `hash` (see `refnames::name_hash`).

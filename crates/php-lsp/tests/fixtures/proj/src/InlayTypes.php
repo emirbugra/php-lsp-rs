@@ -20,4 +20,9 @@ function run(Author $typed, $untyped) {
     $fn = function ($p) {};
     array_map(fn($x) => $x, $posts);
     $copy = $author;
+    $data = ['a' => 1];
+    $label = 'x' . $copy::class;
+    $count = 5;
+    $ok = $author === null;
+    return [$data, $count];
 }

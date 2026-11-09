@@ -106,3 +106,56 @@ fn codeigniter_strings_views_and_factories() {
         c.request("textDocument/definition", json!({ "textDocument": vtd, "position": pos(&vtext, "baseURL", 0, 2) }));
     assert_eq!(locations(&def), vec![("App.php".to_string(), 6)]);
 }
+
+#[test]
+fn wordpress_hooks() {
+    let mut c = Client::start(&fixture("wordpress"));
+    let (uri, text) = c.open("wp-content/plugins/demo/demo.php", None);
+    let td = json!({ "uri": uri });
+
+    // hook names of the right kind: actions in add_action
+    let r = c.request(
+        "textDocument/completion",
+        json!({ "textDocument": td, "position": pos(&text, "add_action('')", 0, 12) }),
+    );
+    let got = labels(&r);
+    for want in ["init", "wp_loaded", "admin_menu"] {
+        assert!(got.iter().any(|l| l == want), "{want} missing in {got:?}");
+    }
+    assert!(!got.iter().any(|l| l == "the_title"), "a filter offered for add_action: {got:?}");
+
+    // where the hook is fired
+    let def =
+        c.request("textDocument/definition", json!({ "textDocument": td, "position": pos(&text, "'init'", 0, 2) }));
+    assert_eq!(locations(&def), vec![("core.php".to_string(), 3)]);
+    let def = c
+        .request("textDocument/definition", json!({ "textDocument": td, "position": pos(&text, "'the_title'", 0, 2) }));
+    assert_eq!(locations(&def), vec![("core.php".to_string(), 5)]);
+
+    // callbacks named by strings
+    let def = c.request(
+        "textDocument/definition",
+        json!({ "textDocument": td, "position": pos(&text, "'demo_setup'", 0, 2) }),
+    );
+    assert_eq!(locations(&def), vec![("demo.php".to_string(), 10)]);
+    let def = c.request(
+        "textDocument/definition",
+        json!({ "textDocument": td, "position": pos(&text, "Demo_Admin::menu", 0, 13) }),
+    );
+    assert_eq!(locations(&def), vec![("demo.php".to_string(), 7)]);
+
+    let h = c.request("textDocument/hover", json!({ "textDocument": td, "position": pos(&text, "'init'", 0, 2) }));
+    let md = h["contents"]["value"].as_str().unwrap();
+    assert!(
+        md.starts_with("**action** `init`") && md.contains("Fired in 1 place") && md.contains("1 callback added"),
+        "{md}"
+    );
+
+    // from where it is fired, to the callbacks
+    let (core, core_text) = c.open("wp-includes/core.php", None);
+    let def = c.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": core }, "position": pos(&core_text, "'init'", 0, 2) }),
+    );
+    assert_eq!(locations(&def), vec![("demo.php".to_string(), 12)]);
+}

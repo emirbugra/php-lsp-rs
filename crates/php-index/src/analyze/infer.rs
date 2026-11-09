@@ -306,10 +306,11 @@ impl Analyzer<'_> {
             }
         }
 
-        let declared: Types = if sym.type_classes.iter().any(|c| has_template(c)) {
-            types::subst(&sym.type_classes, &self.call_bindings(loc, &effective, args))
+        let ret = self.return_atoms(sym, args);
+        let declared: Types = if ret.iter().any(|c| has_template(c)) {
+            types::subst(&ret, &self.call_bindings(loc, &effective, args))
         } else {
-            sym.type_classes.iter().map(|c| c.to_string()).collect()
+            ret
         };
         let mut out = Vec::new();
         for c in &declared {

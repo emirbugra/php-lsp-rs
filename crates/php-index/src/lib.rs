@@ -3,6 +3,7 @@
 pub mod analyze;
 mod arg_count;
 pub mod docblock;
+pub mod hooks;
 pub mod index;
 pub mod inspections;
 pub mod istr;
@@ -11,6 +12,7 @@ pub mod origin;
 pub mod refnames;
 pub mod suggest;
 pub mod symbols;
+mod type_check;
 pub mod types;
 pub mod undefvars;
 
@@ -26,7 +28,9 @@ pub use symbols::{extract, Bases, ParamInfo, Symbol, SymbolKind};
 
 /// Build index data for an already parsed file.
 pub fn index_parse(uri: String, src: &str, parse: &php_syntax::Parse) -> FileData {
-    FileData::new(uri, extract(src, &parse.stmts), refnames::collect(src, &parse.stmts))
+    let mut fd = FileData::new(uri, extract(src, &parse.stmts), refnames::collect(src, &parse.stmts));
+    fd.hooks = hooks::collect(src, &parse.stmts).into_boxed_slice();
+    fd
 }
 
 /// Parse + extract in one go (used by the background indexer). Blade templates are indexed as

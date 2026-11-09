@@ -346,12 +346,31 @@ fn inlay_hints_show_variable_types() {
             )
         })
         .collect();
-    let want: Vec<(u64, u64, String)> =
-        [(13, 11, ": Author"), (15, 10, ": Post[]"), (16, 28, ": Post"), (21, 19, ": Post"), (22, 9, ": Author")]
-            .into_iter()
-            .map(|(l, c, s)| (l, c, s.to_string()))
-            .collect();
+    let want: Vec<(u64, u64, String)> = [
+        (13, 11, ": Author"),
+        (15, 10, ": Post[]"),
+        (16, 28, ": Post"),
+        (21, 19, ": Post"),
+        (22, 9, ": Author"),
+        (23, 9, ": array"),
+        (24, 10, ": string"),
+        (26, 7, ": bool"),
+    ]
+    .into_iter()
+    .map(|(l, c, s)| (l, c, s.to_string()))
+    .collect();
     assert_eq!(got, want);
+
+    // hover on a read shows the scalar type too (literals have no inlay hint, but a hover type)
+    let (_, text) = c.open("src/InlayTypes.php", None);
+    for (needle, want) in [("$data, $count", "$data: array"), ("$count]", "$count: int")] {
+        let h = c.request(
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": uri }, "position": common::pos(&text, needle, 0, 2) }),
+        );
+        let md = h["contents"]["value"].as_str().unwrap_or("");
+        assert!(md.contains(want), "{needle}: {md}");
+    }
 }
 
 #[test]

@@ -170,6 +170,7 @@ impl<'a> SymbolCollector<'a> {
         let templates = self.push_templates(&doc);
         let params = self.params(&f.params, &doc, None, None);
         let (ty, type_classes) = self.return_type(f, &doc, None, None);
+        let cond_ret = self.cond_return(f, &doc, None, None);
         self.pop_templates(templates.len());
         let mut sym = Symbol::new(SymbolKind::Function, name.text.clone(), self.fqn(&name.text), f.span, name.span);
         if !templates.is_empty() {
@@ -186,6 +187,7 @@ impl<'a> SymbolCollector<'a> {
         sym.ty = ty.map(IStr::from);
         sym.ty_native = f.ret.is_some();
         sym.type_classes = istrs(type_classes);
+        sym.cond_ret = cond_ret;
         sym.reads_all_args = reads_all_args(f.span.text(self.src));
         sym.doc = f.doc;
         sym.deprecated = is_deprecated(&doc);
@@ -309,6 +311,7 @@ impl<'a> SymbolCollector<'a> {
         let templates = self.push_templates(&doc);
         let params = self.params(&decl.params, &doc, Some(class_fqn), parent);
         let (ty, type_classes) = self.return_type(decl, &doc, Some(class_fqn), parent);
+        let cond_ret = self.cond_return(decl, &doc, Some(class_fqn), parent);
         self.pop_templates(templates.len());
         let mut sym = Symbol::member(SymbolKind::Method, name.text.clone(), class_fqn, decl.span, name.span);
         if !templates.is_empty() {
@@ -339,6 +342,7 @@ impl<'a> SymbolCollector<'a> {
         sym.ty = ty.map(IStr::from);
         sym.ty_native = decl.ret.is_some();
         sym.type_classes = istrs(type_classes);
+        sym.cond_ret = cond_ret;
         sym.reads_all_args = reads_all_args(decl.span.text(self.src));
         sym.doc = decl.doc;
         sym.deprecated = is_deprecated(&doc);

@@ -12,15 +12,25 @@ impl Server {
             let doc = self.docs.get(&uri)?;
             offset_of(&doc.text, &doc.lines, pos.position)
         };
-        if let Some(h) = self.laravel_hover(&uri, offset) {
+        if let Some(h) = self.laravel_hover(&uri, offset).or_else(|| self.hook_hover(&uri, offset)) {
             return serde_json::to_value(h).ok();
         }
         let analysis = self.analyze_doc(&uri)?;
         let r = analysis.ref_at(offset)?.clone();
 
         let md = match &r.target {
-            RefTarget::Variable { name, classes, .. } => {
-                let ty = if classes.is_empty() { String::new() } else { format!(": {}", classes.join("|")) };
+            RefTarget::Variable { name, classes, decl } => {
+                let ty = if classes.is_empty() {
+                    // no class: a scalar / array type where the variable got its value
+                    let scalar = decl.and_then(|d| {
+                        let doc = self.docs.get(&uri)?;
+                        super::scalar::scalar_types(&doc.text, &doc.parse.stmts, &analysis, &self.index)
+                            .remove(&d.start)
+                    });
+                    scalar.map(|t| format!(": {t}")).unwrap_or_default()
+                } else {
+                    format!(": {}", classes.join("|"))
+                };
                 format!("```php\n${name}{ty}\n```")
             }
             t => {

@@ -21,17 +21,17 @@ use php_syntax::walk::{walk_expr, walk_stmts, Visitor};
 use php_syntax::{Arg, ClassRef, Expr, ExprKind, MemberName, Span, Stmt};
 use rustc_hash::FxHashMap;
 
-struct Call<'ast> {
+pub(crate) struct Call<'ast> {
     /// End of the callee name; equals the end of its [`crate::Reference`] span.
-    callee_end: u32,
-    span: Span,
-    args: &'ast [Arg],
+    pub(crate) callee_end: u32,
+    pub(crate) span: Span,
+    pub(crate) args: &'ast [Arg],
     /// The callee does not depend on an inferred type.
-    exact: bool,
+    pub(crate) exact: bool,
 }
 
 #[derive(Default)]
-struct Calls<'ast>(Vec<Call<'ast>>);
+pub(crate) struct Calls<'ast>(pub(crate) Vec<Call<'ast>>);
 
 impl<'ast> Visitor<'ast> for Calls<'ast> {
     fn visit_expr(&mut self, e: &'ast Expr) {
@@ -116,7 +116,7 @@ fn problem(span: Span, code: &'static str, severity: Severity, message: String) 
 }
 
 /// `strlen(...)`: the parser keeps no argument for the `...`.
-fn is_callable_syntax(src: &str, call: &Call) -> bool {
+pub(crate) fn is_callable_syntax(src: &str, call: &Call) -> bool {
     if !call.args.is_empty() {
         return false;
     }
@@ -130,7 +130,7 @@ fn is_callable_syntax(src: &str, call: &Call) -> bool {
 }
 
 /// Every declaration the call may run.
-fn callees(index: &Index, target: &RefTarget) -> Vec<SymLoc> {
+pub(crate) fn callees(index: &Index, target: &RefTarget) -> Vec<SymLoc> {
     match target {
         RefTarget::Function(cands) => cands
             .iter()

@@ -181,3 +181,73 @@ namespace App\Controllers {
     assert!(ty("l").is_empty());
     assert!(ty("x").is_empty());
 }
+
+#[test]
+fn conditional_return_types() {
+    let src = r#"<?php
+namespace App {
+    class Repo {}
+    class App {}
+    class User {}
+    class Admin extends User {}
+    class Guest {}
+
+    /** @return ($key is null ? Repo : ($key is array ? null : mixed)) */
+    function config($key = null, $default = null) {}
+
+    /**
+     * @template TClass of object
+     * @param string|class-string<TClass>|null $abstract
+     * @return ($abstract is class-string<TClass> ? TClass : ($abstract is null ? App : mixed))
+     */
+    function app($abstract = null) {}
+
+    class Svc {
+        /** @return ($u is User ? Admin : Guest) */
+        public function pick(object $u) {}
+        /** @return ($flag is not true ? Guest : User) */
+        public function flag(bool $flag) {}
+    }
+
+    function run(Svc $s, $unknown) {
+        $a = config();
+        $b = config('app.name');
+        $c = config(null);
+        $d = config(key: null);
+        $e = config($unknown);
+        $f = app();
+        $g = app(User::class);
+        $h = app('cache');
+        $i = $s->pick(new Admin);
+        $j = $s->pick(new Guest);
+        $k = $s->flag(true);
+        $l = $s->flag(false);
+    }
+}
+"#;
+    let mut idx = Index::new();
+    idx.update_file(index_source("file:///cond.php".into(), src));
+    let parse = php_syntax::parse(src);
+    let a = analyze(&idx, src, &parse.stmts);
+    let ty = |v: &str| {
+        a.refs
+            .iter()
+            .find_map(|r| match &r.target {
+                RefTarget::Variable { name, classes, .. } if name == v => Some(classes.clone()),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(ty("a"), ["App\\Repo"]);
+    assert!(ty("b").is_empty(), "{:?}", ty("b"));
+    assert_eq!(ty("c"), ["App\\Repo"]);
+    assert_eq!(ty("d"), ["App\\Repo"]);
+    assert_eq!(ty("e"), ["App\\Repo"], "unknown argument keeps every branch");
+    assert_eq!(ty("f"), ["App\\App"]);
+    assert_eq!(ty("g"), ["App\\User"]);
+    assert!(ty("h").is_empty(), "{:?}", ty("h"));
+    assert_eq!(ty("i"), ["App\\Admin"]);
+    assert_eq!(ty("j"), ["App\\Guest"]);
+    assert_eq!(ty("k"), ["App\\User"]);
+    assert_eq!(ty("l"), ["App\\Guest"]);
+}

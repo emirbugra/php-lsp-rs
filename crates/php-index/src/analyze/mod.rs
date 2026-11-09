@@ -8,10 +8,12 @@
 //! - `scope.rs`: declaring and looking up variables, resolving class names
 //! - `narrowing.rs`: types learned from conditions (`if ($x instanceof User)`)
 //! - `infer.rs`: the type of an expression
+//! - `conditional.rs`: conditional return types (`($x is null ? A : B)`) picked by the call
 //! - `hints.rs`: parameter types of closures passed to well-known functions / methods
 //! - `doc_comments.rs`: class names and `@var` tags inside docblocks
 //! - `visit.rs`: the tree walk itself
 
+mod conditional;
 mod doc_comments;
 mod hints;
 mod infer;

@@ -44,6 +44,8 @@ pub(super) fn initialize_result() -> Value {
                 CodeActionKind::QUICKFIX,
                 CodeActionKind::SOURCE_ORGANIZE_IMPORTS,
                 CodeActionKind::REFACTOR_REWRITE,
+                CodeActionKind::REFACTOR_EXTRACT,
+                CodeActionKind::REFACTOR_INLINE,
             ]),
             work_done_progress_options: Default::default(),
             resolve_provider: Some(false),

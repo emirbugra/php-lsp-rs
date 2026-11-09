@@ -6,7 +6,7 @@
 //! - `diagnostics.rs`: names that do not exist (with a "did you mean" suggestion)
 
 mod diagnostics;
-mod strings;
+pub(crate) mod strings;
 
 pub use strings::string_at;
 
