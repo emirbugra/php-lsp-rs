@@ -28,7 +28,25 @@ pub struct Parse {
 }
 
 pub fn parse(src: &str) -> Parse {
-    let toks = lexer::lex(src);
+    parse_tokens(src, lexer::lex(src))
+}
+
+/// Parse `src` as PHP code from the first byte, without a `<?php` tag (Blade templates turned
+/// into code by [`crate::blade::to_php`]).
+pub fn parse_code(src: &str) -> Parse {
+    parse_tokens(src, lexer::lex_php_range(src, 0, src.len()))
+}
+
+/// [`parse_code`] for Blade code, [`parse`] for everything else.
+pub fn parse_for(src: &str, blade: bool) -> Parse {
+    if blade {
+        parse_code(src)
+    } else {
+        parse(src)
+    }
+}
+
+fn parse_tokens(src: &str, toks: Vec<Token>) -> Parse {
     let mut p = Parser::new(src, toks);
     let mut stmts = Vec::new();
     while !p.at_eof() {

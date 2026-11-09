@@ -165,7 +165,8 @@ pub(super) fn env(root: &Path, read: &Reader, out: &mut Vec<Entry>) {
         let t = t.strip_prefix("export ").unwrap_or(t);
         let Some((k, v)) = t.split_once('=') else { continue };
         let k = k.trim();
-        if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        // CodeIgniter keys are dotted (`database.default.hostname`)
+        if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
             continue;
         }
         let start = here + line.find(k).unwrap_or(0);

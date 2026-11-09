@@ -180,6 +180,9 @@ pub struct Index {
     functions: NameTable,
     consts: NameTable,
     origins: Origins,
+    /// Global class aliases registered at runtime (Laravel's `Route` → `Illuminate\Support\Facades\Route`),
+    /// by lowercase alias. Used only for names no class declares.
+    aliases: FxHashMap<String, String>,
     /// Bumped on every change, so results computed from the index can tell they are outdated.
     generation: u64,
 }
@@ -322,7 +325,20 @@ impl Index {
     }
 
     pub fn find_classes(&self, fqn: &str) -> &[SymLoc] {
-        self.classes.get(strip_generic(fqn).trim_start_matches('\\'), true)
+        let name = strip_generic(fqn).trim_start_matches('\\');
+        let found = self.classes.get(name, true);
+        if found.is_empty() && !self.aliases.is_empty() && !name.contains('\\') {
+            if let Some(target) = self.aliases.get(&name.to_ascii_lowercase()) {
+                return self.classes.get(target, true);
+            }
+        }
+        found
+    }
+
+    /// Set the global class aliases (`alias` → target FQN).
+    pub fn set_class_aliases(&mut self, aliases: impl IntoIterator<Item = (String, String)>) {
+        self.aliases = aliases.into_iter().map(|(a, t)| (a.to_ascii_lowercase(), t)).collect();
+        self.generation += 1;
     }
 
     pub fn find_class(&self, fqn: &str) -> Option<SymLoc> {
@@ -614,7 +630,11 @@ impl Index {
 
     /// All transitive sub-types of `fqn` (breadth first, each once).
     pub fn descendants(&self, fqn: &str) -> Vec<SymLoc> {
-        let map = self.subtype_map();
+        self.descendants_with(&self.subtype_map(), fqn)
+    }
+
+    /// [`Self::descendants`] with a [`Self::subtype_map`] computed once for many queries.
+    pub fn descendants_with(&self, map: &FxHashMap<String, Vec<SymLoc>>, fqn: &str) -> Vec<SymLoc> {
         let mut out: Vec<SymLoc> = Vec::new();
         let mut seen: FxHashSet<SymLoc> = FxHashSet::default();
         let mut queue = vec![strip_generic(fqn).trim_start_matches('\\').to_ascii_lowercase()];

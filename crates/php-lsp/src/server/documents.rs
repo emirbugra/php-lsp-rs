@@ -25,13 +25,18 @@ impl Server {
 
     pub(super) fn did_open(&mut self, p: DidOpenTextDocumentParams) {
         let uri = canon(&p.text_document.uri);
-        let text = p.text_document.text;
-        let parse = Arc::new(php_syntax::parse(&text));
+        let blade = php_syntax::blade::is_blade(&uri);
+        let (text, source) = if blade {
+            (php_syntax::blade::to_php(&p.text_document.text), Some(p.text_document.text))
+        } else {
+            (p.text_document.text, None)
+        };
+        let parse = Arc::new(php_syntax::parse_for(&text, blade));
         let lines = LineIndex::new(&text);
         self.index.update_file(php_index::index_parse(uri.clone(), &text, &parse));
         let version = p.text_document.version;
-        self.docs
-            .insert(uri.clone(), Doc { text, version, lines, parse, analysis: Mutex::new(None), checked: Vec::new() });
+        let doc = Doc { text, source, version, lines, parse, analysis: Mutex::new(None), checked: Vec::new() };
+        self.docs.insert(uri.clone(), doc);
         self.publish_diagnostics(&uri);
     }
 
@@ -39,16 +44,21 @@ impl Server {
         let uri = canon(&p.text_document.uri);
         if let Some(doc) = self.docs.get_mut(&uri) {
             for ch in p.content_changes {
+                // a Blade template and its code have the same offsets: positions resolve on either
+                let target = doc.source.as_mut().unwrap_or(&mut doc.text);
                 match ch.range {
                     Some(r) => {
-                        let s = offset_of(&doc.text, &doc.lines, r.start);
-                        let e = offset_of(&doc.text, &doc.lines, r.end);
-                        let (s, e) = (s.min(doc.text.len()), e.min(doc.text.len()).max(s));
-                        doc.text.replace_range(s..e, &ch.text);
+                        let s = offset_of(target, &doc.lines, r.start);
+                        let e = offset_of(target, &doc.lines, r.end);
+                        let (s, e) = (s.min(target.len()), e.min(target.len()).max(s));
+                        target.replace_range(s..e, &ch.text);
                     }
-                    None => doc.text = ch.text,
+                    None => *target = ch.text,
                 }
-                doc.lines = LineIndex::new(&doc.text);
+                doc.lines = LineIndex::new(target);
+            }
+            if let Some(src) = &doc.source {
+                doc.text = php_syntax::blade::to_php(src);
             }
             doc.version = p.text_document.version;
         }
@@ -94,7 +104,7 @@ impl Server {
     /// Parse and index an edited document now; its diagnostics follow after the debounce.
     fn reparse(&mut self, uri: &str) {
         let Some(doc) = self.docs.get_mut(uri) else { return };
-        let parse = Arc::new(php_syntax::parse(&doc.text));
+        let parse = Arc::new(php_syntax::parse_for(&doc.text, doc.source.is_some()));
         doc.lines = LineIndex::new(&doc.text);
         let data = php_index::index_parse(uri.to_string(), &doc.text, &parse);
         doc.parse = parse;

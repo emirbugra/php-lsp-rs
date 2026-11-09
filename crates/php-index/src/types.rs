@@ -422,6 +422,42 @@ pub fn atom_base(atom: &str) -> &str {
     }
 }
 
+/// Short, readable form of a type for inlay hints: class names without namespace, generic arguments
+/// that are not `mixed`, `|` between union members (`App\User[]` -> `User[]`,
+/// `Illuminate\Support\Collection<mixed,App\User>` -> `Collection<User>`). None for unknown or
+/// unresolved types (template parameters, `static`) and for unions of more than three members.
+pub fn short_display(types: &[String]) -> Option<String> {
+    if types.is_empty() || types.len() > 3 {
+        return None;
+    }
+    let parts: Option<Vec<String>> = types.iter().map(|a| short_atom(a)).collect();
+    Some(parts?.join("|"))
+}
+
+fn short_atom(atom: &str) -> Option<String> {
+    if has_template(atom) || atom.eq_ignore_ascii_case("static") || atom.is_empty() {
+        return None;
+    }
+    if let Some(elem) = array_elem(atom) {
+        return Some(format!("{}[]", short_atom(elem)?));
+    }
+    let base = atom_base(atom);
+    let short = base.rsplit('\\').next().unwrap_or(base);
+    if base.eq_ignore_ascii_case("Closure") {
+        return Some("Closure".to_string());
+    }
+    let mut args = Vec::new();
+    for arg in generic_args(atom) {
+        let atoms = arg_atoms(arg);
+        if atoms.is_empty() {
+            continue;
+        }
+        let shown: Option<Vec<String>> = atoms.iter().map(|a| short_atom(a)).collect();
+        args.push(shown?.join("|"));
+    }
+    Some(if args.is_empty() { short.to_string() } else { format!("{short}<{}>", args.join(", ")) })
+}
+
 pub fn has_template(atom: &str) -> bool {
     atom.contains('@')
 }

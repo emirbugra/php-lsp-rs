@@ -19,6 +19,7 @@ pub(super) fn initialize_result() -> Value {
             more_trigger_character: Some(vec!["\n".into()]),
         }),
         inlay_hint_provider: Some(OneOf::Left(true)),
+        code_lens_provider: Some(CodeLensOptions { resolve_provider: Some(true) }),
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
         implementation_provider: Some(ImplementationProviderCapability::Simple(true)),

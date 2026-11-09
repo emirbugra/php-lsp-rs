@@ -312,8 +312,9 @@ impl Server {
         patched.push_str(&doc.text[..word.start]);
         patched.push_str(PLACEHOLDER);
         patched.push_str(&doc.text[word.end..]);
-        let parse = php_syntax::parse(&patched);
-        let analysis = php_index::analyze(&self.index, &patched, &parse.stmts);
+        let blade = doc.source.is_some();
+        let parse = php_syntax::parse_for(&patched, blade);
+        let analysis = php_index::analyze_with(&self.index, &patched, &parse.stmts, &self.view_variables(uri), &[]);
         let mut classes = analysis.refs.iter().find_map(|r| match &r.target {
             RefTarget::Member { name, classes, .. } if name == PLACEHOLDER => Some(classes.clone()),
             _ => None,

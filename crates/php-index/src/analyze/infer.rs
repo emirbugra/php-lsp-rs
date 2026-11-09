@@ -102,6 +102,9 @@ impl Analyzer<'_> {
             if let Some(r) = self.builtin_call(n.text.trim_start_matches('\\'), args) {
                 return r;
             }
+            if let Some(r) = self.factory_call(n.text.trim_start_matches('\\'), args) {
+                return r;
+            }
             for cand in self.ctx.resolve_function(&n.text) {
                 if let Some(loc) = self.index.find_function(&cand) {
                     return self.member_types(loc, "", args);
@@ -332,6 +335,35 @@ impl Analyzer<'_> {
     }
 
     /// Return type of well-known array functions, which the stubs only declare as `array`.
+    /// CodeIgniter 4 factories named by a string: `model('UserModel')` → `App\Models\UserModel`,
+    /// `service('request')` → what `Config\Services::request()` returns, `config('App')` →
+    /// `Config\App`. Only when that class / method exists, so other frameworks' helpers of the
+    /// same name (`config('app.name')` in Laravel) are left alone.
+    fn factory_call(&self, name: &str, args: &[Arg]) -> Option<Types> {
+        let lower = name.to_ascii_lowercase();
+        if !matches!(lower.as_str(), "model" | "service" | "config") {
+            return None;
+        }
+        let key = args.first().filter(|a| !a.spread && a.name.is_none())?.value.string_value(self.src)?;
+        let key = key.trim_start_matches('\\');
+        if key.is_empty() || key.contains(['.', ' ', '/']) {
+            return None;
+        }
+        let class =
+            |cands: &[String]| cands.iter().find(|c| self.index.find_class(c).is_some()).map(|c| vec![c.clone()]);
+        match lower.as_str() {
+            "model" if key.contains('\\') => class(&[key.to_string()]),
+            "model" => class(&[format!("App\\Models\\{key}"), key.to_string()]),
+            "config" if key.contains('\\') => class(&[key.to_string()]),
+            "config" => class(&[format!("Config\\{key}"), format!("App\\Config\\{key}")]),
+            _ => ["Config\\Services", "CodeIgniter\\Config\\Services"].iter().find_map(|services| {
+                let loc = self.index.find_member(services, key, MemberKind::Method)?;
+                let t = self.member_types(loc, services, &[]);
+                (!t.is_empty()).then_some(t)
+            }),
+        }
+    }
+
     fn builtin_call(&self, name: &str, args: &[Arg]) -> Option<Types> {
         if name.contains('\\') {
             return None;

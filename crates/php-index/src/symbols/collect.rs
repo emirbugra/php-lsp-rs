@@ -39,6 +39,19 @@ fn const_range(it: &ConstItem) -> Span {
     Span::new(it.name.span.start as usize, it.value.span.end.max(it.name.span.end) as usize)
 }
 
+/// The body calls `func_get_args()`, `func_get_arg()` or `func_num_args()` (any letter case).
+fn reads_all_args(body: &str) -> bool {
+    let b = body.as_bytes();
+    let pat = b"func_";
+    b.windows(pat.len()).enumerate().any(|(i, w)| {
+        w.eq_ignore_ascii_case(pat) && {
+            let rest = &b[i + pat.len()..];
+            let starts = |p: &[u8]| rest.len() >= p.len() && rest[..p.len()].eq_ignore_ascii_case(p);
+            starts(b"get_arg") || starts(b"num_args")
+        }
+    })
+}
+
 fn is_deprecated(doc: &Option<DocBlock>) -> bool {
     doc.as_ref().map(|d| d.is_deprecated()).unwrap_or(false)
 }
@@ -173,6 +186,7 @@ impl<'a> SymbolCollector<'a> {
         sym.ty = ty.map(IStr::from);
         sym.ty_native = f.ret.is_some();
         sym.type_classes = istrs(type_classes);
+        sym.reads_all_args = reads_all_args(f.span.text(self.src));
         sym.doc = f.doc;
         sym.deprecated = is_deprecated(&doc);
         self.out.push(sym);
@@ -325,6 +339,7 @@ impl<'a> SymbolCollector<'a> {
         sym.ty = ty.map(IStr::from);
         sym.ty_native = decl.ret.is_some();
         sym.type_classes = istrs(type_classes);
+        sym.reads_all_args = reads_all_args(decl.span.text(self.src));
         sym.doc = decl.doc;
         sym.deprecated = is_deprecated(&doc);
         let ret_classes = sym.type_classes.clone();

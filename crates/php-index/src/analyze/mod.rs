@@ -76,6 +76,8 @@ pub struct Analysis {
     /// Class types of every `return` value and arrow-function body, keyed by the expression's span.
     /// Used to suggest return types; scalars are not represented (see [`Types`]).
     pub returns: Vec<(Span, Types)>,
+    /// Class types of the expressions asked for with [`analyze_with`], keyed by their span.
+    pub expr_types: Vec<(Span, Types)>,
 }
 
 impl Analysis {
@@ -104,12 +106,22 @@ impl Analysis {
 }
 
 pub fn analyze(index: &Index, src: &str, stmts: &[Stmt]) -> Analysis {
+    analyze_with(index, src, stmts, &[], &[])
+}
+
+/// [`analyze`] with variables that exist before the first statement (the data a controller passes
+/// to a Blade view), recording the types of the expressions at `want` in [`Analysis::expr_types`].
+pub fn analyze_with(index: &Index, src: &str, stmts: &[Stmt], seed: &[(String, Types)], want: &[Span]) -> Analysis {
+    let mut top = Scope { vars: FxHashMap::default(), span: Span::new(0, src.len()) };
+    for (name, classes) in seed {
+        top.vars.insert(name.clone(), VarInfo { classes: classes.clone(), decl: Span::new(0, 0) });
+    }
     let mut a = Analyzer {
         index,
         src,
         ctx: NameCtx::default(),
         classes: Vec::new(),
-        scopes: vec![Scope { vars: FxHashMap::default(), span: Span::new(0, src.len()) }],
+        scopes: vec![top],
         out: Analysis::default(),
         pending_doc_type: None,
         doc_vars: Vec::new(),
@@ -117,6 +129,7 @@ pub fn analyze(index: &Index, src: &str, stmts: &[Stmt]) -> Analysis {
         closure_hint: None,
         branch_depth: 0,
         seen_docs: Default::default(),
+        want: want.iter().map(|s| (s.start, s.end)).collect(),
     };
     walk_stmts(&mut a, stmts);
     let top = a.scopes.pop().unwrap();
@@ -158,6 +171,8 @@ struct Analyzer<'a> {
     branch_depth: u32,
     /// Docblocks whose class names were already turned into references (by start offset).
     seen_docs: rustc_hash::FxHashSet<u32>,
+    /// Expression spans whose types go to [`Analysis::expr_types`].
+    want: rustc_hash::FxHashSet<(u32, u32)>,
 }
 
 fn push_unique(v: &mut Types, s: String) {

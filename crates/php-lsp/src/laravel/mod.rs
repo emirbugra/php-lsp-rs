@@ -1,16 +1,25 @@
-//! Laravel string references: route names, config keys, translation keys, view names and `.env`
-//! keys of one Laravel project, collected from `routes/`, `config/`, `lang/`, `resources/views/`
-//! and `.env`. Cheap to rebuild (a few dozen small files), so the server keeps it for a short time
-//! only and never has to track invalidation precisely.
+//! Framework string references: route names, config keys, translation keys, view / template
+//! names, controller handlers and `.env` keys of one Laravel, Symfony or CodeIgniter 4 project.
+//! Cheap to rebuild (a few dozen small files), so the server keeps it for a short time only and
+//! never has to track invalidation precisely.
 //!
-//! - `routes.rs`: route names from `routes/*.php` (groups, resources, `Auth::routes()` …)
-//! - `project_files.rs`: config, translations, views and `.env`
-//! - `vendor.rs`: what installed packages add (only used to avoid false warnings)
+//! - `routes.rs`: Laravel route names from `routes/*.php` (groups, resources, `Auth::routes()` …)
+//! - `project_files.rs`: Laravel config, translations, views and `.env`
+//! - `vendor.rs`: what installed Laravel packages add (only used to avoid false warnings)
+//! - `aliases.rs`: Laravel's global class aliases
+//! - `symfony.rs`: Symfony routes (attributes, annotations, YAML) and Twig templates
+//! - `codeigniter.rs`: CodeIgniter 4 routes, controller handlers, views, languages and configs
+//! - `view_vars.rs`: the variables a view receives from the code that renders it
 
+mod aliases;
+mod codeigniter;
 mod project_files;
 mod routes;
+mod symfony;
 mod vendor;
+pub mod view_vars;
 
+pub use aliases::aliases;
 pub use vendor::VendorData;
 
 use crate::convert::*;
@@ -32,13 +41,46 @@ pub struct Entry {
     pub open: bool,
 }
 
+/// Which framework a project uses.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Framework {
+    #[default]
+    Laravel,
+    Symfony,
+    CodeIgniter,
+}
+
+/// The framework of the application at `root`, if it is one this server knows.
+pub fn framework_of(root: &Path) -> Option<Framework> {
+    if is_laravel(root) {
+        Some(Framework::Laravel)
+    } else if root.join("bin/console").is_file()
+        && (root.join("config/bundles.php").is_file() || root.join("vendor/symfony/framework-bundle").is_dir())
+    {
+        Some(Framework::Symfony)
+    } else if root.join("app/Config/Routes.php").is_file()
+        && (root.join("spark").is_file() || root.join("vendor/codeigniter4/framework").is_dir())
+    {
+        Some(Framework::CodeIgniter)
+    } else {
+        None
+    }
+}
+
+/// The data of one project. (Named after the first framework supported; holds every framework's.)
 #[derive(Default, Debug)]
 pub struct LaravelData {
+    pub framework: Framework,
     pub routes: Vec<Entry>,
     pub config: Vec<Entry>,
     pub trans: Vec<Entry>,
     pub views: Vec<Entry>,
     pub env: Vec<Entry>,
+    /// Controller methods a route can point at (`Home::index`; CodeIgniter).
+    pub handlers: Vec<Entry>,
+    /// The application finds views in places of its own (a custom `view.finder`, extra locations
+    /// added in a service provider): view names cannot be checked.
+    pub views_dynamic: bool,
     /// Names / keys registered by installed packages (only used to avoid false warnings).
     pub vendor: Arc<VendorData>,
 }
@@ -51,6 +93,8 @@ pub enum Kind {
     Trans,
     View,
     Env,
+    /// A controller method in a route definition (`'Home::index'`).
+    Handler,
 }
 
 impl LaravelData {
@@ -61,6 +105,7 @@ impl LaravelData {
             Kind::Trans => &self.trans,
             Kind::View => &self.views,
             Kind::Env => &self.env,
+            Kind::Handler => &self.handlers,
         }
     }
 
@@ -92,13 +137,40 @@ pub type Reader<'a> = dyn Fn(&Path) -> Option<String> + 'a;
 
 pub fn build(root: &Path, read: &Reader) -> LaravelData {
     let mut d = LaravelData::default();
+    match framework_of(root) {
+        Some(Framework::Symfony) => {
+            d.framework = Framework::Symfony;
+            symfony::build(root, read, &mut d);
+            project_files::env(root, read, &mut d.env);
+            return d;
+        }
+        Some(Framework::CodeIgniter) => {
+            d.framework = Framework::CodeIgniter;
+            codeigniter::build(root, read, &mut d);
+            project_files::env(root, read, &mut d.env);
+            return d;
+        }
+        _ => {}
+    }
     routes::routes(root, read, &mut d.routes);
+    d.views_dynamic = custom_view_finder(root, read);
     project_files::config(root, read, &mut d.config);
     project_files::translations(root, read, &mut d.trans);
     project_files::views(root, &mut d.views);
     project_files::env(root, read, &mut d.env);
     d.vendor = vendor::vendor_data(root);
     d
+}
+
+/// Does a service provider replace the view finder or add view locations?
+fn custom_view_finder(root: &Path, read: &Reader) -> bool {
+    let mut fs = Vec::new();
+    files(&root.join("app/Providers"), &mut fs, 0);
+    fs.iter().filter_map(|f| read(f)).any(|src| {
+        ["'view.finder'", "\"view.finder\"", "addLocation(", "prependLocation(", "setFinder("]
+            .iter()
+            .any(|m| src.contains(m))
+    })
 }
 
 // ---- helpers shared by the collectors -------------------------------------

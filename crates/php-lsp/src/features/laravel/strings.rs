@@ -1,6 +1,6 @@
-//! The string literal under the cursor and the Laravel call it is an argument of.
+//! The string literal under the cursor and the framework call it is an argument of.
 
-use crate::laravel::Kind;
+use crate::laravel::{Framework, Kind};
 
 /// The string literal under the cursor.
 #[derive(Debug, Clone)]
@@ -104,17 +104,80 @@ fn use_of(method: &str) -> Use {
     }
 }
 
-/// Which Laravel registry a string argument at `lit` refers to.
-pub fn kind_at(text: &str, lit: &StrLit) -> Option<Kind> {
-    call_at(text, lit).map(|(k, _)| k)
+/// Which registry a string argument at `lit` refers to.
+pub fn kind_at(text: &str, lit: &StrLit, fw: Framework) -> Option<Kind> {
+    call_at(text, lit, fw).map(|(k, _)| k)
 }
 
 /// Registry and usage of the string argument at `lit`.
-pub fn call_at(text: &str, lit: &StrLit) -> Option<(Kind, Use)> {
+pub fn call_at(text: &str, lit: &StrLit, fw: Framework) -> Option<(Kind, Use)> {
     let (paren, arg_index) = open_paren(text, lit.quote)?;
     let (word_start, word) = word_before(text, paren);
     let word = word.trim_start_matches('\\').to_ascii_lowercase();
     let before = text[..word_start].trim_end();
+    match fw {
+        Framework::Laravel => laravel_call(text, before, &word, arg_index),
+        Framework::Symfony => symfony_call(before, &word, arg_index),
+        Framework::CodeIgniter => codeigniter_call(before, &word, arg_index),
+    }
+}
+
+/// `$this->generateUrl('x')`, `$router->generate('x')`, `$this->render('x.html.twig')`,
+/// `#[Template('x.html.twig')]`.
+fn symfony_call(before: &str, word: &str, arg_index: usize) -> Option<(Kind, Use)> {
+    if arg_index != 0 {
+        return None;
+    }
+    let kind = if let Some(receiver) = before.strip_suffix("->") {
+        let receiver = receiver.trim_end_matches('?').trim_end().to_ascii_lowercase();
+        match word {
+            "generateurl" | "redirecttoroute" => Some(Kind::Route),
+            // `generate()` of anything else (UUID factories, fakers) is not a route
+            "generate" if receiver.ends_with("router") || receiver.ends_with("generator") => Some(Kind::Route),
+            "render" | "renderview" | "renderblock" | "renderblockview" | "stream" => Some(Kind::View),
+            _ => None,
+        }
+    } else if before.ends_with("::") {
+        None
+    } else {
+        (word == "template").then_some(Kind::View)
+    };
+    kind.map(|k| (k, Use::Read))
+}
+
+/// `view('x')`, `route_to('x')`, `lang('File.key')`, `config('App')`, `env('X')`,
+/// `redirect()->route('x')`, and the handler of `$routes->get('path', 'Home::index')`.
+fn codeigniter_call(before: &str, word: &str, arg_index: usize) -> Option<(Kind, Use)> {
+    if let Some(receiver) = before.strip_suffix("->") {
+        let receiver = receiver.trim_end_matches('?').trim_end();
+        let kind = match (word, arg_index) {
+            ("route", 0) => Some(Kind::Route),
+            ("get" | "post" | "put" | "patch" | "delete" | "options" | "head" | "add" | "cli", 1)
+                if receiver.ends_with("$routes") =>
+            {
+                Some(Kind::Handler)
+            }
+            ("match", 2) if receiver.ends_with("$routes") => Some(Kind::Handler),
+            _ => None,
+        };
+        return kind.map(|k| (k, Use::Read));
+    }
+    if before.ends_with("::") {
+        return None;
+    }
+    let kind = match (word, arg_index) {
+        ("view", 0) => Some(Kind::View),
+        ("route_to" | "url_to", 0) => Some(Kind::Route),
+        ("lang", 0) => Some(Kind::Trans),
+        ("config", 0) => Some(Kind::Config),
+        ("env", 0) => Some(Kind::Env),
+        _ => None,
+    };
+    kind.map(|k| (k, Use::Read))
+}
+
+fn laravel_call(text: &str, before: &str, word: &str, arg_index: usize) -> Option<(Kind, Use)> {
+    let word = word.to_string();
     if before.ends_with("->") {
         // method call: `->route('x')`, `->view('x')`, `config()->get('x')`
         let receiver = before.trim_end_matches("->").trim_end_matches('?').trim_end();
@@ -166,7 +229,7 @@ mod tests {
         let at = src.find('|').unwrap();
         let text = src.replace('|', "");
         let lit = string_at(&text, at)?;
-        kind_at(&text, &lit)
+        kind_at(&text, &lit, Framework::Laravel)
     }
 
     #[test]

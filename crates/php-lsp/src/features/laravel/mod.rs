@@ -30,6 +30,7 @@ fn item_kind(k: Kind) -> CompletionItemKind {
         Kind::Trans => CompletionItemKind::TEXT,
         Kind::View => CompletionItemKind::FILE,
         Kind::Env => CompletionItemKind::CONSTANT,
+        Kind::Handler => CompletionItemKind::METHOD,
     }
 }
 
@@ -40,6 +41,7 @@ fn kind_name(k: Kind) -> &'static str {
         Kind::Trans => "translation",
         Kind::View => "view",
         Kind::Env => "env",
+        Kind::Handler => "handler",
     }
 }
 
@@ -50,6 +52,7 @@ fn label(k: Kind) -> &'static str {
         Kind::Trans => "Translation",
         Kind::View => "View",
         Kind::Env => "Env key",
+        Kind::Handler => "Controller method",
     }
 }
 
@@ -62,15 +65,59 @@ fn describe(e: &Entry) -> String {
 
 impl Server {
     /// Deepest workspace / composer root containing `file` that is a Laravel application.
-    fn laravel_root(&self, file: &Path) -> Option<PathBuf> {
+    pub(crate) fn laravel_root(&self, file: &Path) -> Option<PathBuf> {
         self.composers
             .iter()
             .map(|c| &c.root)
             .chain(self.roots.iter())
             .filter(|r| file.starts_with(r))
             .max_by_key(|r| r.components().count())
-            .filter(|r| laravel::is_laravel(r))
+            .filter(|r| laravel::framework_of(r).is_some())
             .cloned()
+    }
+
+    /// Variables a view sees: what the project passes to it where it is rendered, plus in Blade
+    /// `$errors` (and `$attributes` / `$slot` in components). Empty for files that are not views.
+    /// Collected again after [`TTL`].
+    pub(crate) fn view_variables(&self, uri: &str) -> Arc<Vec<(String, php_index::types::Types)>> {
+        if !laravel::view_vars::maybe_view(uri) {
+            return Arc::default();
+        }
+        let mut cache = self.view_vars.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, v)) = cache.get(uri) {
+            if at.elapsed() < TTL {
+                return v.clone();
+            }
+        }
+        let started = Instant::now();
+        let path = uri_to_path(uri).unwrap_or_default();
+        let root = self.laravel_root(&path);
+        let blade = php_syntax::blade::is_blade(uri);
+        let name = root.as_ref().and_then(|r| match laravel::framework_of(r) {
+            Some(laravel::Framework::Laravel) if blade => laravel::view_vars::view_name(r, &path),
+            Some(laravel::Framework::CodeIgniter) if !blade => laravel::view_vars::ci_view_name(r, &path),
+            _ => None,
+        });
+        let mut vars = if blade {
+            laravel::view_vars::shared(name.as_deref().is_some_and(|n| n.starts_with("components.")))
+        } else {
+            Vec::new()
+        };
+        if let (Some(root), Some(name)) = (&root, &name) {
+            let read = |u: &str| self.text_for(u).map(|t| t.into_owned());
+            for (k, t) in laravel::view_vars::collect(&self.index, &path_to_uri(root), name, &read) {
+                vars.retain(|(n, _)| *n != k);
+                vars.push((k, t));
+            }
+            log::debug!(
+                "view '{name}' gets {} variable(s) in {:.1} ms",
+                vars.len(),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        let vars = Arc::new(vars);
+        cache.insert(uri.to_string(), (Instant::now(), vars.clone()));
+        vars
     }
 
     fn laravel_data(&mut self, root: &Path) -> Arc<LaravelData> {
@@ -99,14 +146,12 @@ impl Server {
 
     /// Laravel string under the cursor: (literal, kind, current value, project data).
     fn laravel_at(&mut self, uri: &str, offset: usize) -> Option<(StrLit, Kind, String, Arc<LaravelData>)> {
-        let (lit, kind, value) = {
-            let doc = self.docs.get(uri)?;
-            let lit = string_at(&doc.text, offset)?;
-            let kind = kind_at(&doc.text, &lit)?;
-            (lit.clone(), kind, doc.text[lit.start..lit.end].to_string())
-        };
+        let lit = string_at(&self.docs.get(uri)?.text, offset)?;
         let root = self.laravel_root(&uri_to_path(uri)?)?;
         let data = self.laravel_data(&root);
+        let doc = self.docs.get(uri)?;
+        let kind = kind_at(&doc.text, &lit, data.framework)?;
+        let value = doc.text[lit.start..lit.end].to_string();
         Some((lit, kind, value, data))
     }
 
@@ -149,11 +194,7 @@ impl Server {
 
     /// Warnings for route / view / config / translation names that do not exist.
     pub fn laravel_diagnostics(&mut self, uri: &str) -> Vec<Diagnostic> {
-        if !self.config.laravel_diagnostics
-            || !self.config.inspections
-            || self.index.is_library(uri)
-            || uri.ends_with(".blade.php")
-        {
+        if !self.config.laravel_diagnostics || !self.config.inspections || self.index.is_library(uri) {
             return Vec::new();
         }
         let Some(root) = uri_to_path(uri).and_then(|p| self.laravel_root(&p)) else { return Vec::new() };
@@ -185,18 +226,23 @@ impl Server {
         let Some(root) = self.laravel_root(&path) else { return false };
         let Ok(rel) = path.strip_prefix(&root) else { return false };
         let rel = rel.to_string_lossy().replace('\\', "/");
-        [
-            "routes/",
-            "config/",
-            "lang/",
-            "resources/lang/",
-            "resources/views/",
-            "app/Providers/",
-            "bootstrap/app.php",
-            "Modules/",
-        ]
-        .iter()
-        .any(|p| rel.starts_with(p))
+        let sources: &[&str] = match laravel::framework_of(&root) {
+            Some(laravel::Framework::Symfony) => &["src/Controller/", "config/routes", "templates/"],
+            Some(laravel::Framework::CodeIgniter) => {
+                &["app/Config/", "app/Controllers/", "app/Views/", "app/Language/"]
+            }
+            _ => &[
+                "routes/",
+                "config/",
+                "lang/",
+                "resources/lang/",
+                "resources/views/",
+                "app/Providers/",
+                "bootstrap/app.php",
+                "Modules/",
+            ],
+        };
+        sources.iter().any(|p| rel.starts_with(p))
     }
 
     pub fn laravel_hover(&mut self, uri: &str, offset: usize) -> Option<Hover> {

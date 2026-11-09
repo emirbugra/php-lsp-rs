@@ -64,6 +64,9 @@ pub struct Symbol {
     pub is_virtual: bool,
     /// Class docblock has `@mixin` (members may be forwarded to another class).
     pub mixin: bool,
+    /// Function / method body reads its arguments with `func_get_args()` / `func_get_arg()` /
+    /// `func_num_args()`, so callers may pass more arguments than it declares.
+    pub reads_all_args: bool,
     /// Type display text (return type, property type, constant value type).
     pub ty: Option<IStr>,
     /// `ty` is written in the declaration (not taken from the docblock).
@@ -125,6 +128,7 @@ impl Symbol {
             deprecated: false,
             is_virtual: false,
             mixin: false,
+            reads_all_args: false,
             ty: None,
             ty_native: false,
             type_classes: Vec::new(),

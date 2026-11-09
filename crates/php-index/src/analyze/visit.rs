@@ -102,6 +102,10 @@ impl<'ast> Visitor<'ast> for Analyzer<'_> {
     }
 
     fn visit_expr(&mut self, e: &'ast Expr) {
+        if !self.want.is_empty() && self.want.contains(&(e.span.start, e.span.end)) {
+            let classes = self.infer(e);
+            self.out.expr_types.push((e.span, classes));
+        }
         match &e.kind {
             ExprKind::Var(name) => self.visit_var(name, e.span),
             ExprKind::Name(n) => {

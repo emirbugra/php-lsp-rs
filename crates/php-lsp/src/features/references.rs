@@ -8,7 +8,7 @@
 use crate::convert::*;
 use crate::server::Server;
 use lsp_types::*;
-use php_index::{name_hash, MemberKind, RefTarget, SymLoc, SymbolKind};
+use php_index::{name_hash, types::Types, MemberKind, RefTarget, SymLoc, SymbolKind};
 use php_syntax::{LineIndex, Span};
 use rayon::prelude::*;
 use serde_json::Value;
@@ -56,7 +56,8 @@ struct Scan<'a> {
 }
 
 impl<'a> Scan<'a> {
-    fn run(&self, uri: &str, text: &str, parse: Option<&php_syntax::Parse>) -> Vec<Span> {
+    /// `seed`: variables the file starts with (a Blade template's view data).
+    fn run(&self, uri: &str, text: &str, parse: Option<&php_syntax::Parse>, seed: &[(String, Types)]) -> Vec<Span> {
         // cheap pre-filter on the raw text
         let nb = self.name.as_bytes();
         if !text.as_bytes().windows(nb.len()).any(|w| w.eq_ignore_ascii_case(nb)) {
@@ -66,11 +67,11 @@ impl<'a> Scan<'a> {
         let parse = match parse {
             Some(p) => p,
             None => {
-                owned = php_syntax::parse(text);
+                owned = php_syntax::parse_for(text, php_syntax::blade::is_blade(uri));
                 &owned
             }
         };
-        let analysis = php_index::analyze(self.index, text, &parse.stmts);
+        let analysis = php_index::analyze_with(self.index, text, &parse.stmts, seed, &[]);
         let mut out = Vec::new();
         for r in &analysis.refs {
             match ref_name(&r.target) {
@@ -154,16 +155,30 @@ impl Server {
         None
     }
 
+    /// Text to search for references: an open document's, or the file's (a Blade template's PHP code).
     fn text_of_candidate(&self, uri: &str) -> Option<String> {
         if let Some(d) = self.docs.get(uri) {
             return Some(d.text.clone());
         }
         std::fs::metadata(uri_to_path(uri)?).ok().filter(|m| m.len() < 4 * 1024 * 1024)?;
-        read_text(&uri_to_path(uri)?)
+        let text = read_text(&uri_to_path(uri)?)?;
+        Some(if php_syntax::blade::is_blade(uri) { php_syntax::blade::to_php(&text) } else { text })
     }
 
     /// All references to `target`. `for_rename` widens members to overrides and skips vendor files.
     pub(crate) fn find_hits(&self, uri: &str, target: &Target, include_decl: bool, for_rename: bool) -> Vec<Hit> {
+        self.find_hits_in(uri, target, include_decl, for_rename, &|_| true)
+    }
+
+    /// [`Self::find_hits`] limited to the candidate files (URIs) `keep` accepts.
+    pub(crate) fn find_hits_in(
+        &self,
+        uri: &str,
+        target: &Target,
+        include_decl: bool,
+        for_rename: bool,
+        keep: &(dyn Fn(&str) -> bool + Sync),
+    ) -> Vec<Hit> {
         match target {
             Target::Var { name, decl } => {
                 let Some(doc) = self.docs.get(uri) else { return Vec::new() };
@@ -189,6 +204,7 @@ impl Server {
                     .files_with_name(hash)
                     .into_iter()
                     .filter_map(|id| self.index.file(id).map(|f| f.uri.to_string()))
+                    .filter(|u| keep(u))
                     .collect();
                 let target_in_vendor =
                     locs.first().map(|l| self.index.is_library(self.index.uri_of(*l))).unwrap_or(false);
@@ -212,7 +228,8 @@ impl Server {
                                 Some(d) => (std::borrow::Cow::Borrowed(d.text.as_str()), Some(d.parse.clone())),
                                 None => (std::borrow::Cow::Owned(self.text_of_candidate(u)?), None),
                             };
-                            let spans = scan.run(u, &text, parse.as_deref());
+                            let seed = self.view_variables(u);
+                            let spans = scan.run(u, &text, parse.as_deref(), &seed);
                             if spans.is_empty() {
                                 return None;
                             }
@@ -299,7 +316,8 @@ impl Server {
             Target::Var { .. } => self.find_hits(&uri, &target, true, false).into_iter().map(|h| h.span).collect(),
             Target::Syms { locs, name, .. } => {
                 let scan = Scan { index: &self.index, targets: locs, name, include_decl: true, verify_text: false };
-                scan.run(&uri, &doc.text, Some(&doc.parse))
+                let seed = self.view_variables(&uri);
+                scan.run(&uri, &doc.text, Some(&doc.parse), &seed)
             }
         };
         let hl: Vec<DocumentHighlight> = spans

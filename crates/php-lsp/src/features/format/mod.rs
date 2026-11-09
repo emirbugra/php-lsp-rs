@@ -83,6 +83,10 @@ impl Server {
     }
 
     fn engine(&self, uri: &str) -> Engine {
+        // the document text of a template is its PHP code, not something to write back
+        if php_syntax::blade::is_blade(uri) {
+            return Engine::Off;
+        }
         let setting = self.config.formatter.as_str();
         match setting {
             "off" => return Engine::Off,

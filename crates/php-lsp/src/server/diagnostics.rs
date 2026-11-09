@@ -6,6 +6,12 @@ use lsp_types::*;
 use php_syntax::ParseError;
 use serde_json::json;
 
+/// Inspections reported in Blade templates. Left out: undefined functions and constants (directives
+/// become calls like `section(…)`, non-ASCII text becomes stray names), argument counts of
+/// directives mapped to `view()` (`@each` takes four), unused imports.
+const BLADE_CHECKS: &[&str] =
+    &["undefined-class", "undefined-method", "undefined-class-constant", "deprecated", "missing-argument"];
+
 impl Server {
     /// Check `uri` completely and publish the result.
     pub(crate) fn publish_diagnostics(&mut self, uri: &str) {
@@ -37,6 +43,11 @@ impl Server {
             uri
         );
         let Some(doc) = self.docs.get(uri) else { return Vec::new() };
+        if doc.source.is_some() {
+            // a template: its code is made up (see `php_syntax::blade`), so no syntax errors, and
+            // only checks the made-up parts cannot trip
+            return problems.into_iter().filter(|p| BLADE_CHECKS.contains(&p.code)).map(|p| problem(doc, p)).collect();
+        }
         let mut diags: Vec<Diagnostic> = doc.parse.errors.iter().take(200).map(|e| syntax_error(doc, e)).collect();
         diags.extend(problems.into_iter().map(|p| problem(doc, p)));
         diags

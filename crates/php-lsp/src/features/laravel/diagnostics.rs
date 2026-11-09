@@ -1,7 +1,7 @@
 //! Route / view / config / translation names that do not exist in the project.
 
 use super::strings::{call_at, StrLit, Use};
-use crate::laravel::{Entry, Kind, LaravelData};
+use crate::laravel::{Entry, Framework, Kind, LaravelData};
 use php_syntax::walk::{walk_expr, Visitor};
 use php_syntax::{ClassRef, Expr, ExprKind, MemberName, Stmt};
 
@@ -75,8 +75,40 @@ fn nested_known<'e>(key: &str, entries: impl Iterator<Item = &'e Entry> + Clone)
 }
 
 fn known(data: &LaravelData, kind: Kind, key: &str, config_sets: &[String]) -> bool {
+    match data.framework {
+        Framework::Laravel => {}
+        Framework::Symfony => {
+            return match kind {
+                // `_wdt`, `_profiler`, `_api_*`: routes of bundles
+                Kind::Route => {
+                    data.routes.is_empty() || key.starts_with('_') || data.routes.iter().any(|e| e.key == key)
+                }
+                // `@Bundle/x.html.twig`; plain strings that are not templates (`->render('x')` of something else)
+                Kind::View => {
+                    data.views.is_empty()
+                        || key.starts_with('@')
+                        || !key.ends_with(".twig")
+                        || data.views.iter().any(|e| e.key == key)
+                }
+                _ => true,
+            };
+        }
+        Framework::CodeIgniter => {
+            return match kind {
+                // routes can be named by their handler (`route_to('Home::index')`)
+                Kind::Route => data.routes.is_empty() || key.contains("::") || data.routes.iter().any(|e| e.key == key),
+                // namespaced views (`Modules\Blog\Views\x`) live elsewhere
+                Kind::View => data.views.is_empty() || key.contains('\\') || data.views.iter().any(|e| e.key == key),
+                Kind::Trans => {
+                    key.contains(char::is_whitespace) || !key.contains('.') || nested_known(key, data.trans.iter())
+                }
+                // config classes of other namespaces (packages) are found at runtime
+                _ => true,
+            };
+        }
+    }
     match kind {
-        Kind::Env => true,
+        Kind::Env | Kind::Handler => true,
         Kind::Route => {
             data.routes.is_empty()
                 || data.routes.iter().any(|e| e.key == key)
@@ -85,7 +117,7 @@ fn known(data: &LaravelData, kind: Kind, key: &str, config_sets: &[String]) -> b
         }
         Kind::View => {
             let key = key.replace('/', ".");
-            data.views.is_empty() || key.contains("::") || data.views.iter().any(|e| e.key == key)
+            data.views.is_empty() || data.views_dynamic || key.contains("::") || data.views.iter().any(|e| e.key == key)
         }
         Kind::Config => {
             // `App::setLocale()` writes `app.locale` at runtime
@@ -165,7 +197,7 @@ pub fn unknown_keys(text: &str, stmts: &[Stmt], data: &LaravelData) -> Vec<Unkno
             continue;
         }
         let lit = StrLit { quote: s, start: s + 1, end: e - 1 };
-        let Some((kind, usage)) = call_at(text, &lit) else { continue };
+        let Some((kind, usage)) = call_at(text, &lit, data.framework) else { continue };
         if usage == Use::Set && kind == Kind::Config {
             v.config_sets.push(content.to_string());
         }

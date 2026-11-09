@@ -142,3 +142,42 @@ fn narrowing() {
     let c = last("cond");
     assert!(c.contains(&"App\\Team".to_string()) && c.contains(&"App\\User".to_string()), "{c:?}");
 }
+
+#[test]
+fn codeigniter_factories() {
+    let src = r#"<?php
+namespace App\Models { class UserModel {} }
+namespace Config {
+    class App {}
+    class Services { public static function request(bool $shared = true): \CodeIgniter\HTTP\IncomingRequest {} }
+}
+namespace CodeIgniter\HTTP { class IncomingRequest {} }
+namespace App\Controllers {
+    function run() {
+        $m = model('UserModel');
+        $c = config('App');
+        $r = service('request');
+        $l = config('app.name');
+        $x = model('Missing');
+    }
+}
+"#;
+    let mut idx = Index::new();
+    idx.update_file(index_source("file:///ci.php".into(), src));
+    let parse = php_syntax::parse(src);
+    let a = analyze(&idx, src, &parse.stmts);
+    let ty = |v: &str| {
+        a.refs
+            .iter()
+            .find_map(|r| match &r.target {
+                RefTarget::Variable { name, classes, .. } if name == v => Some(classes.clone()),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(ty("m"), ["App\\Models\\UserModel"]);
+    assert_eq!(ty("c"), ["Config\\App"]);
+    assert_eq!(ty("r"), ["CodeIgniter\\HTTP\\IncomingRequest"]);
+    assert!(ty("l").is_empty());
+    assert!(ty("x").is_empty());
+}

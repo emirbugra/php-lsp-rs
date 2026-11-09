@@ -23,7 +23,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub struct Doc {
+    /// The text features work on: the document itself, or for a Blade template the PHP code made
+    /// of it (same length, lines and columns; see `php_syntax::blade`).
     pub text: String,
+    /// The template text of a Blade document (edits apply to it; `text` is rebuilt from it).
+    pub source: Option<String>,
     pub version: i32,
     pub lines: LineIndex,
     pub parse: Arc<Parse>,
@@ -36,6 +40,9 @@ pub struct Doc {
 
 /// (index generation, document version)
 type AnalysisKey = (u64, i32);
+
+/// Variables a view starts with, by name.
+pub type ViewVars = Arc<Vec<(String, php_index::types::Types)>>;
 
 pub struct Config {
     pub index_vendor: bool,
@@ -50,6 +57,12 @@ pub struct Config {
     pub php_version: String,
     /// Settings of the built-in formatter (`formatPreset`, `formatOptions`, `useProjectCodeStyle`).
     pub format: crate::features::FormatSettings,
+    /// Inlay hints with parameter names at call sites.
+    pub inlay_parameter_names: bool,
+    /// Inlay hints with the inferred type of variables where they are first assigned.
+    pub inlay_variable_types: bool,
+    /// Reference / implementation counts above classes and methods.
+    pub code_lens: bool,
 }
 
 pub struct Server {
@@ -68,6 +81,11 @@ pub struct Server {
     next_id: i32,
     indexing: bool,
     last_pct: i64,
+    /// `workspace/*/refresh` requests the client supports, sent when indexing finishes so lenses and
+    /// hints computed against a half-built index are redone.
+    refresh: Vec<&'static str>,
+    /// Variables of Blade views (by template URI), with the time they were collected.
+    pub view_vars: Mutex<FxHashMap<String, (std::time::Instant, ViewVars)>>,
     /// Laravel route / config / translation / view / env data per project root, with build time.
     pub laravel: FxHashMap<PathBuf, (std::time::Instant, std::sync::Arc<crate::laravel::LaravelData>)>,
 }
@@ -88,11 +106,22 @@ pub fn run(conn: Connection) -> Res<()> {
     let init: InitializeParams = serde_json::from_value(params)?;
     let roots = workspace_roots(&init);
     let config = Config::from_options(init.initialization_options.as_ref().unwrap_or(&Value::Null));
+    let refresh = refresh_support(&init);
     conn.initialize_finish(id, capabilities::initialize_result())?;
 
     let composers: Vec<Composer> = roots.iter().flat_map(|r| php_composer::discover(r)).collect();
     log::info!("workspace roots: {:?}, composer projects: {}", roots, composers.len());
-    let index = index_with_stubs(&roots, &composers);
+    let mut index = index_with_stubs(&roots, &composers);
+    let aliases: Vec<(String, String)> = composers
+        .iter()
+        .map(|c| &c.root)
+        .chain(roots.iter())
+        .filter(|r| crate::laravel::is_laravel(r))
+        .flat_map(|r| crate::laravel::aliases(r))
+        .collect();
+    if !aliases.is_empty() {
+        index.set_class_aliases(aliases);
+    }
 
     let (tx, rx) = bounded::<IndexMsg>(indexer::QUEUE);
     indexer::spawn(roots.clone(), index.origins().clone(), config.index_vendor, tx);
@@ -113,10 +142,24 @@ pub fn run(conn: Connection) -> Res<()> {
         next_id: 1000,
         indexing: true,
         last_pct: -1,
+        refresh,
+        view_vars: Mutex::new(FxHashMap::default()),
         laravel: FxHashMap::default(),
     };
     server.create_progress();
     server.main_loop(rx)
+}
+
+fn refresh_support(init: &InitializeParams) -> Vec<&'static str> {
+    let ws = init.capabilities.workspace.as_ref();
+    let mut out = Vec::new();
+    if ws.and_then(|w| w.code_lens.as_ref()).and_then(|c| c.refresh_support).unwrap_or(false) {
+        out.push("workspace/codeLens/refresh");
+    }
+    if ws.and_then(|w| w.inlay_hint.as_ref()).and_then(|c| c.refresh_support).unwrap_or(false) {
+        out.push("workspace/inlayHint/refresh");
+    }
+    out
 }
 
 /// Workspace folders, or the root URI of clients that send only that.
@@ -151,7 +194,25 @@ impl Config {
             laravel_diagnostics: opts.get("laravelDiagnostics").and_then(|v| v.as_bool()).unwrap_or(true),
             php_version: opts.get("phpVersion").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
             format: crate::features::FormatSettings::from_options(opts),
+            inlay_parameter_names: true,
+            inlay_variable_types: true,
+            code_lens: true,
         }
+        .with_live(opts)
+    }
+
+    fn with_live(mut self, opts: &Value) -> Config {
+        self.update_live(opts);
+        self
+    }
+
+    /// Take the settings that apply without a restart from `opts` (initialization options or a
+    /// `workspace/didChangeConfiguration` payload); absent keys keep their value.
+    pub fn update_live(&mut self, opts: &Value) {
+        let flag = |key: &str, old: bool| opts.get(key).and_then(|v| v.as_bool()).unwrap_or(old);
+        self.inlay_parameter_names = flag("inlayParameterNames", self.inlay_parameter_names);
+        self.inlay_variable_types = flag("inlayVariableTypes", self.inlay_variable_types);
+        self.code_lens = flag("codeLens", self.code_lens);
     }
 }
 
@@ -275,6 +336,9 @@ impl Server {
                 for uri in open {
                     self.publish_diagnostics(&uri);
                 }
+                for method in self.refresh.clone() {
+                    self.request(method, Value::Null);
+                }
             }
         }
     }
@@ -313,6 +377,7 @@ impl Server {
             "workspace/didChangeConfiguration" => {
                 if let Some(settings) = n.params.get("settings") {
                     self.config.format.update(settings);
+                    self.config.update_live(settings);
                 }
             }
             "workspace/didChangeWatchedFiles" => {
@@ -394,6 +459,8 @@ impl Server {
             "textDocument/rangeFormatting" => Ok(self.range_formatting(params(req.params)?)),
             "textDocument/onTypeFormatting" => Ok(self.on_type_formatting(params(req.params)?)),
             "textDocument/inlayHint" => Ok(self.inlay_hints(params(req.params)?)),
+            "textDocument/codeLens" => Ok(self.code_lens(params(req.params)?)),
+            "codeLens/resolve" => Ok(self.code_lens_resolve(params(req.params)?)),
             "textDocument/typeDefinition" => Ok(self.type_definition(params(req.params)?)),
             "textDocument/prepareCallHierarchy" => Ok(self.prepare_call_hierarchy(params(req.params)?)),
             "callHierarchy/incomingCalls" => Ok(self.incoming_calls(params(req.params)?)),
@@ -419,7 +486,8 @@ impl Server {
                 return Some(a.clone());
             }
         }
-        let analysis = Arc::new(php_index::analyze(&self.index, &doc.text, &doc.parse.stmts));
+        let vars = self.view_variables(uri);
+        let analysis = Arc::new(php_index::analyze_with(&self.index, &doc.text, &doc.parse.stmts, &vars, &[]));
         *cached = Some((key, analysis.clone()));
         Some(analysis)
     }

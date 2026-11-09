@@ -18,7 +18,7 @@ pub struct Problem {
     pub span: Span,
     /// Stable id used by quick fixes: `undefined-class`, `undefined-function`, `undefined-constant`,
     /// `undefined-method`, `undefined-class-constant`, `unused-import`, `unused-private`,
-    /// `missing-abstract`, `deprecated`, `undefined-variable`.
+    /// `missing-abstract`, `deprecated`, `undefined-variable`, `missing-argument`, `too-many-arguments`.
     pub code: &'static str,
     pub message: String,
     pub severity: Severity,
@@ -61,6 +61,9 @@ pub fn inspect(
 ) -> Vec<Problem> {
     let mut out = crate::undefvars::undefined_variables(index, src, &parse.stmts, analysis);
     reference_problems(index, src, &parse.stmts, analysis, opts, &mut out);
+    if !uri.ends_with(".phpstorm.meta.php") {
+        crate::arg_count::argument_count_problems(index, src, &parse.stmts, analysis, &mut out);
+    }
     for u in unused_uses(src, &parse.stmts) {
         let mut p = problem(
             u.item_span,

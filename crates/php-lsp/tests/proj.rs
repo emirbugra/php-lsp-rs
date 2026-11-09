@@ -324,6 +324,78 @@ fn inlay_hints_name_parameters() {
     assert_eq!(got, want);
 }
 
+#[test]
+fn inlay_hints_show_variable_types() {
+    let mut c = client();
+    let (uri, _) = c.open("src/InlayTypes.php", None);
+    let r = c.request(
+        "textDocument/inlayHint",
+        json!({ "textDocument": { "uri": uri }, "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 100, "character": 0 } } }),
+    );
+    let got: Vec<(u64, u64, String)> = r
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|h| h["kind"] == 1)
+        .map(|h| {
+            let p = &h["position"];
+            (
+                p["line"].as_u64().unwrap() + 1,
+                p["character"].as_u64().unwrap(),
+                h["label"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let want: Vec<(u64, u64, String)> =
+        [(13, 11, ": Author"), (15, 10, ": Post[]"), (16, 28, ": Post"), (21, 19, ": Post"), (22, 9, ": Author")]
+            .into_iter()
+            .map(|(l, c, s)| (l, c, s.to_string()))
+            .collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn code_lenses_count_references_and_implementations() {
+    let mut c = client();
+    let (uri, _) = c.open("src/Impl.php", None);
+    let lenses = c.request("textDocument/codeLens", json!({ "textDocument": { "uri": uri } }));
+    let mut got: Vec<(u64, u64, String)> = Vec::new();
+    for lens in lenses.as_array().unwrap() {
+        let lens = if lens["command"].is_null() { c.request("codeLens/resolve", lens.clone()) } else { lens.clone() };
+        let start = &lens["range"]["start"];
+        got.push((
+            start["line"].as_u64().unwrap() + 1,
+            start["character"].as_u64().unwrap(),
+            lens["command"]["title"].as_str().unwrap().to_string(),
+        ));
+    }
+    got.sort();
+    let want: Vec<(u64, u64, String)> = [
+        (4, 10, "2 references"),
+        (4, 10, "4 implementations"),
+        (4, 34, "1 reference"),
+        (4, 34, "3 implementations"),
+        (5, 15, "3 references"),
+        (5, 15, "3 subclasses"),
+        (5, 64, "0 references"),
+        (5, 64, "2 implementations"),
+        (5, 95, "1 override"),
+        (5, 95, "1 reference"),
+        (6, 6, "0 references"),
+        (6, 44, "0 references"),
+        (7, 6, "1 reference"),
+        (7, 6, "1 subclass"),
+        (7, 44, "0 references"),
+        (7, 90, "0 references"),
+        (8, 6, "0 references"),
+        (10, 9, "0 references"),
+    ]
+    .into_iter()
+    .map(|(l, c, s)| (l, c, s.to_string()))
+    .collect();
+    assert_eq!(got, want);
+}
+
 /// Every line marked `//@ BAD` (or `//@ BAD x2`) in Undef.php has that many undefined variables,
 /// and no other line has any.
 #[test]
